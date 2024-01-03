@@ -12,7 +12,7 @@ class TokenBoundaryHealer:
 
     def __call__(self, prompt: str) -> str:
         left_ids, toks_alts = self.trim_prompt(prompt)
-        if not toks_alts[0]: return prompt
+        if not toks_alts: return prompt
         max_length_1, past_kv = MaxLengthCriteria(1), None
         def allowed_toks(f): return PrefixConstrainedLogitsProcessor(f, num_beams=1)
         for tok_alts in reversed(toks_alts): # regenerate last trimmed toks first
