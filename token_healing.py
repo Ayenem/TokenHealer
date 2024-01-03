@@ -3,14 +3,14 @@ from transformers.generation import PrefixConstrainedLogitsProcessor, MaxLengthC
 from torch import IntTensor
 from pygtrie import CharTrie
 
-def allowed_toks(f): return PrefixConstrainedLogitsProcessor(f, num_beams=1)
+def allowed_toks(toks): return PrefixConstrainedLogitsProcessor(lambda *_: toks, num_beams=1)
 
 class TokenBoundaryHealer:
 
     def __init__(self, model, tokenizer):
         self.model, self.vocab_trie = model, CharTrie(tokenizer.get_vocab())
         self.encode, self.decode = tokenizer.encode, tokenizer.decode
-        self._gen_kwargs = {
+        self.use_cache, self._gen_kwargs = model.config.use_cache, {
             'stopping_criteria': MaxLengthCriteria(1),
             'pad_token_id': model.config.pad_token_id,
         }
@@ -18,24 +18,7 @@ class TokenBoundaryHealer:
     def __call__(self, prompt: str) -> str:
         left_ids, toks_alts = self.trim_prompt(prompt)
         if not toks_alts: return prompt
-        if self.model.config.use_cache:
-            past_key_values = None
-            for tok_alts in reversed(toks_alts): # regenerate last trimmed toks first
-                left_ids = self.model.greedy_search(
-                    left_ids,
-                    logits_processor=allowed_toks(lambda *_, alts=tok_alts: alts),
-                    past_key_values=past_key_values,
-                    return_dict_in_generate=True,
-                    **self._gen_kwargs,
-                )
-                left_ids, past_key_values = left_ids.sequences, left_ids.past_key_values
-        else:
-            for tok_alts in reversed(toks_alts):
-                left_ids = self.model.greedy_search(
-                    left_ids,
-                    logits_processor=allowed_toks(lambda *_, alts=tok_alts: alts),
-                    **self._gen_kwargs,
-                )
+        left_ids = self.regenerate_tokens(left_ids, toks_alts)
         healed_prompt = self.decode(left_ids.squeeze(), skip_special_tokens=True)
         return healed_prompt
 
@@ -49,3 +32,17 @@ class TokenBoundaryHealer:
         trimmed_toks_alts = [*takewhile(lambda exts: len(exts) > 1, tail_toks_extensions)]
 
         return prompt_ids[:, : -len(trimmed_toks_alts) or None], trimmed_toks_alts
+
+    def regenerate_tokens(self, ids: IntTensor, toks_alts: list[list[int]]) -> IntTensor:
+        past_kv = None
+        for tok_alts in reversed(toks_alts): # regenerate last trimmed toks first
+            ids = self.model.greedy_search(
+                ids,
+                logits_processor=allowed_toks(tok_alts),
+                return_dict_in_generate=self.use_cache,
+                past_key_values=past_kv,
+                **self._gen_kwargs,
+            )
+            if self.use_cache:
+                ids, past_kv = ids.sequences, ids.past_key_values #type: ignore
+        return ids

@@ -16,8 +16,7 @@ completion_model = AutoModelForCausalLM.from_pretrained(
     device_map='auto',
     trust_remote_code=False,
     revision='main',
-    # use_cache=True,
-    use_cache=False,
+    use_cache=True,
 )
 tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, use_fast=True)
 
