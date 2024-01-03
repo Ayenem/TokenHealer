@@ -5,7 +5,6 @@ def generate(prompt, model, tokenizer):
     input_ids = tokenizer(prompt, return_tensors='pt').input_ids.cuda()
     generation_config = GenerationConfig(
         temperature=0.7, do_sample=True, top_p=0.95, top_k=40, max_new_tokens=16,
-        use_cache=True,
         pad_token_id=model.config.pad_token_id,
     )
     output = model.generate(inputs=input_ids, generation_config=generation_config)
@@ -16,7 +15,9 @@ completion_model = AutoModelForCausalLM.from_pretrained(
     model_name_or_path,
     device_map='auto',
     trust_remote_code=False,
-    revision='main'
+    revision='main',
+    # use_cache=True,
+    use_cache=False,
 )
 tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, use_fast=True)
 
