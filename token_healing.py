@@ -3,30 +3,39 @@ from transformers.generation import PrefixConstrainedLogitsProcessor, MaxLengthC
 from torch import IntTensor
 from pygtrie import CharTrie
 
+def allowed_toks(f): return PrefixConstrainedLogitsProcessor(f, num_beams=1)
+
 class TokenBoundaryHealer:
 
     def __init__(self, model, tokenizer):
-        self.model, self.use_cache = model, model.config.use_cache
+        self.model, self.vocab_trie = model, CharTrie(tokenizer.get_vocab())
         self.encode, self.decode = tokenizer.encode, tokenizer.decode
-        self.vocab_trie = CharTrie(tokenizer.get_vocab())
+        self._gen_kwargs = {
+            'stopping_criteria': MaxLengthCriteria(1),
+            'pad_token_id': model.config.pad_token_id,
+        }
 
     def __call__(self, prompt: str) -> str:
         left_ids, toks_alts = self.trim_prompt(prompt)
         if not toks_alts: return prompt
-        max_length_1, past_kv = MaxLengthCriteria(1), None
-        def allowed_toks(f): return PrefixConstrainedLogitsProcessor(f, num_beams=1)
-        for tok_alts in reversed(toks_alts): # regenerate last trimmed toks first
-            left_ids = self.model.greedy_search(
-                left_ids,
-                logits_processor=allowed_toks(lambda *_, alts=tok_alts: alts),
-                stopping_criteria=max_length_1,
-                pad_token_id=self.model.config.pad_token_id,
-                return_dict_in_generate=self.use_cache,
-                past_key_values=past_kv,
-            )
-            if self.use_cache:
-                past_kv, left_ids = left_ids.past_key_values, left_ids.sequences
-
+        if self.model.config.use_cache:
+            past_key_values = None
+            for tok_alts in reversed(toks_alts): # regenerate last trimmed toks first
+                left_ids = self.model.greedy_search(
+                    left_ids,
+                    logits_processor=allowed_toks(lambda *_, alts=tok_alts: alts),
+                    past_key_values=past_key_values,
+                    return_dict_in_generate=True,
+                    **self._gen_kwargs,
+                )
+                left_ids, past_key_values = left_ids.sequences, left_ids.past_key_values
+        else:
+            for tok_alts in reversed(toks_alts):
+                left_ids = self.model.greedy_search(
+                    left_ids,
+                    logits_processor=allowed_toks(lambda *_, alts=tok_alts: alts),
+                    **self._gen_kwargs,
+                )
         healed_prompt = self.decode(left_ids.squeeze(), skip_special_tokens=True)
         return healed_prompt
 
